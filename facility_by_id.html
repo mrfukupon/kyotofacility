@@ -1,0 +1,57 @@
+
+<!DOCTYPE html>
+<html lang='ja'>
+<head>
+  <meta charset='UTF-8'>
+  <title>施設案内（ID指定・JSONP版）</title>
+  <script src='https://code.jquery.com/jquery-3.6.0.min.js'></script>
+  <style>
+    body { font-family: sans-serif; padding: 2em; background: #f9f9f9; }
+    h1 { color: #2c3e50; }
+    p { margin: 0.5em 0; }
+    .label { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1 id='name'>施設名</h1>
+  <p><span class='label'>住所:</span> <span id='address'></span></p>
+  <p><span class='label'>電話番号:</span> <span id='phone'></span></p>
+  <p><span class='label'>メール:</span> <span id='email'></span></p>
+  <p><span class='label'>説明:</span> <span id='description'></span></p>
+  <p><span class='label'>公式サイト:</span> <a id='url' href='#' target='_blank'>リンク</a></p>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const facilityId = params.get("ID");
+
+    if (!facilityId) {
+      $("body").html("<p>IDが指定されていません。URLに ?ID=施設ID を付けてください。</p>");
+    } else {
+      $.ajax({
+        url: "https://data.bodik.jp/api/3/action/datastore_search",
+        data: {
+          resource_id: "aa1b14ae-a824-4762-8f33-e45d22b61c58",
+          filters: JSON.stringify({ "ID": facilityId })
+        },
+        dataType: "jsonp",
+        success: function(data) {
+          if (data.result.records.length === 0) {
+            $("body").html(`<p>ID「${facilityId}」の施設情報が見つかりませんでした。</p>`);
+            return;
+          }
+          const record = data.result.records[0];
+          $("#name").text(record["名称"]);
+          $("#address").text(record["所在地_連結表記"]);
+          $("#phone").text(record["電話番号"]);
+          $("#email").text(record["連絡先メールアドレス"]);
+          $("#description").text(record["説明"]);
+          $("#url").attr("href", record["URL"]).text(record["URL"]);
+        },
+        error: function() {
+          $("body").html("<p>データの取得に失敗しました。</p>");
+        }
+      });
+    }
+  </script>
+</body>
+</html>
