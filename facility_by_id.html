@@ -1,57 +1,154 @@
-
-<!DOCTYPE html>
-<html lang='ja'>
+<!doctype html>
+<html lang="ja">
 <head>
-  <meta charset='UTF-8'>
-  <title>施設案内（ID指定・JSONP版）</title>
-  <script src='https://code.jquery.com/jquery-3.6.0.min.js'></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>施設案内（ID指定 / BODIK API版）</title>
   <style>
-    body { font-family: sans-serif; padding: 2em; background: #f9f9f9; }
-    h1 { color: #2c3e50; }
-    p { margin: 0.5em 0; }
-    .label { font-weight: bold; }
-  </style>
-</head>
-<body>
-  <h1 id='name'>施設名</h1>
-  <p><span class='label'>住所:</span> <span id='address'></span></p>
-  <p><span class='label'>電話番号:</span> <span id='phone'></span></p>
-  <p><span class='label'>メール:</span> <span id='email'></span></p>
-  <p><span class='label'>説明:</span> <span id='description'></span></p>
-  <p><span class='label'>公式サイト:</span> <a id='url' href='#' target='_blank'>リンク</a></p>
-
-  <script>
-    const params = new URLSearchParams(window.location.search);
-    const facilityId = params.get("ID");
-
-    if (!facilityId) {
-      $("body").html("<p>IDが指定されていません。URLに ?ID=施設ID を付けてください。</p>");
-    } else {
-      $.ajax({
-        url: "https://data.bodik.jp/api/3/action/datastore_search",
-        data: {
-          resource_id: "aa1b14ae-a824-4762-8f33-e45d22b61c58",
-          filters: JSON.stringify({ "ID": facilityId })
-        },
-        dataType: "jsonp",
-        success: function(data) {
-          if (data.result.records.length === 0) {
-            $("body").html(`<p>ID「${facilityId}」の施設情報が見つかりませんでした。</p>`);
-            return;
-          }
-          const record = data.result.records[0];
-          $("#name").text(record["名称"]);
-          $("#address").text(record["所在地_連結表記"]);
-          $("#phone").text(record["電話番号"]);
-          $("#email").text(record["連絡先メールアドレス"]);
-          $("#description").text(record["説明"]);
-          $("#url").attr("href", record["URL"]).text(record["URL"]);
-        },
-        error: function() {
-          $("body").html("<p>データの取得に失敗しました。</p>");
-        }
-      });
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans JP", sans-serif;
+           line-height: 1.65; margin: 0; padding: 24px; }
+    h1 { margin: 0 0 8px; font-size: clamp(18px, 3.2vw, 24px); }
+    .sub { color: #666; margin: 0 0 16px; }
+    .card { border: 1px solid rgba(0,0,0,.08); border-radius: 12px; padding: 16px; max-width: 840px; }
+    .row { margin: 6px 0; }
+    .label { color:#555; width:10em; display:inline-block; vertical-align: top; }
+    .val { font-weight:600; }
+    .muted { color:#888; }
+    #status { margin: 8px 0 16px; }
+    a { color: #0b67ff; }
+    .grid {
+      display: grid; grid-template-columns: 1fr; gap: 8px 16px;
     }
-  </script>
+    @media (min-width: 720px) {
+      .grid { grid-template-columns: 16em 1fr; align-items: start; }
+      .label { width:auto; display:block; }
+    }
+    .map { height: 320px; border-radius: 10px; overflow: hidden; border: 1px solid rgba(0,0,0,.08); }
+    .footer { margin-top: 16px; font-size: 12px; color: #777; }
+    code { background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 4px; }
+  </style>
+  <!-- （オプション）地図を出す場合は Leaflet を利用 -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9B-20nQCchB9co0qIjJZRGuk2/Z9VM+kd=KY0100020001</code>（京都府国際センター）</p>
+
+  <div id="status" role="status">読み込み中…</div>
+
+  <div class="card" id="card" hidden>
+    <div class="grid">
+      <div class="label">施設名</div>
+      <div class="val" id="name"></div>
+
+      <div class="label">住所</div>
+      <div class="val" id="addr"></div>
+
+      <div class="label">電話番号</div>
+      <div class="val" id="tel"></div>
+
+      <div class="label">メール</div>
+      <div class="val" id="mail"></div>
+
+      <div class="label">説明</div>
+      <div class="val" id="desc"></div>
+
+      <div class="label">公式サイト</div>
+      <div class="val"><a id="site" href="#" target="_blank" rel="noopener">—</a></div>
+
+      <div class="label">ID</div>
+      <div class="val" id="id"></div>
+    </div>
+
+    <div style="margin-top:16px">
+      <div class="label" style="display:block;margin-bottom:6px">地図</div>
+      <div id="map" class="map" aria-label="施設周辺地図"></div>
+      <div class="muted" id="map-note" style="margin-top:6px"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Powered by https://wapi.bodik.jp/docs.
+  </div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const qs = new URLSearchParams(location.search);
+  const id = (qs.get('id') || 'KY0100020001').trim();
+
+  // BODIK API（公共施設）: CORS対応。IDで1件取得。
+  const api = new URL('https://wapi.bodik.jp/public_facility');
+  api.searchParams.set('ID', id);
+  api.searchParams.set('maxResults', '1');
+
+  const status = $('status');
+  const card = $('card');
+
+  function text(v){ return (v==null || v==='') ? '—' : String(v); }
+
+  async function main(){
+    try {
+      const res = await fetch(api.toString(), { headers: { 'Accept': 'application/json' }});
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+
+      // wapiの代表的な返却は { data: [...] }。環境によっては配列直返しのこともあるので両対応。
+      const record = Array.isArray(json?.data) ? json.data[0] : (Array.isArray(json) ? json[0] : null);
+      if(!record){ status.textContent = `ID=${id} の施設が見つかりません。`; return; }
+
+      // 項目名（自治体標準ODSの代表ケース＋フォールバック）
+      const name = record['名称'] || record['施設名'] || record['name'];
+      const addr = record['所在地_連結表記'] || record['住所'] || record['所在地'] || [
+        record['所在地_都道府県'], record['所在地_市区町村'], record['所在地_町字'], record['所在地_番地以下'], record['建物名等（方書）']
+      ].filter(Boolean).join('');
+      const tel  = record['電話番号'] || record['TEL'] || record['tel'];
+      const mail = record['メールアドレス'] || record['email'];
+      const desc = record['説明'] || record['description'];
+      const site = record['URL'] || record['公式サイト'] || record['website'];
+      const lat  = Number(record['緯度']);
+      const lon  = Number(record['経度']);
+
+      // 画面反映
+      $('name').textContent = text(name);
+      $('addr').textContent = text(addr);
+      $('tel').textContent  = text(tel);
+      $('mail').textContent = text(mail);
+      $('desc').textContent = text(desc);
+      $('id').textContent   = text(record['ID'] || id);
+
+      const siteEl = $('site');
+      if(site){ siteEl.href = site; siteEl.textContent = site; } else { siteEl.removeAttribute('href'); siteEl.textContent = '—'; }
+
+      // 地図（緯度経度がある場合のみ表示）
+      if(!Number.isNaN(lat) && !Number.isNaN(lon)){
+        // Leafletの読み込みが間に合っていれば地図描画
+        if(window.L){
+          const map = L.map('map').setView([lat, lon], 16);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+          }).addTo(map);
+          L.marker([lat, lon]).addTo(map).bindPopup(text(name) || '施設').openPopup();
+          $('map-note').textContent = `緯度 ${lat}, 経度 ${lon}`;
+        } else {
+          $('map').style.display = 'none';
+          $('map-note').textContent = '地図ライブラリの読み込みに失敗しました。';
+        }
+      } else {
+        $('map').style.display = 'none';
+        $('map-note').textContent = '緯度・経度情報がありません。';
+      }
+
+      status.hidden = true;
+      card.hidden = false;
+
+    } catch(e){
+      console.error(e);
+      status.textContent = `取得に失敗しました：${e.message}`;
+    }
+  }
+
+  main();
+})();
+</script>
 </body>
 </html>
