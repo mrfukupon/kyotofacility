@@ -6,56 +6,46 @@
   <title>施設案内（ID指定 / BODIK API版）</title>
   <style>
     :root { color-scheme: light dark; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans JP", sans-serif;
-           line-height: 1.65; margin: 0; padding: 24px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans JP", sans-serif; line-height: 1.65; margin: 0; padding: 24px; }
     h1 { margin: 0 0 8px; font-size: clamp(18px, 3.2vw, 24px); }
     .sub { color: #666; margin: 0 0 16px; }
-    .card { border: 1px solid rgba(0,0,0,.08); border-radius: 12px; padding: 16px; max-width: 840px; }
-    .row { margin: 6px 0; }
-    .label { color:#555; width:10em; display:inline-block; vertical-align: top; }
+    .card { border: 1px solid rgba(0,0,0,.08); border-radius: 12px; padding: 16px; max-width: 880px; }
+    .grid { display: grid; grid-template-columns: 16em 1fr; gap: 8px 16px; }
+    .label { color:#555; }
     .val { font-weight:600; }
     .muted { color:#888; }
     #status { margin: 8px 0 16px; }
-    a { color: #0b67ff; }
-    .grid {
-      display: grid; grid-template-columns: 1fr; gap: 8px 16px;
-    }
-    @media (min-width: 720px) {
-      .grid { grid-template-columns: 16em 1fr; align-items: start; }
-      .label { width:auto; display:block; }
-    }
     .map { height: 320px; border-radius: 10px; overflow: hidden; border: 1px solid rgba(0,0,0,.08); }
-    .footer { margin-top: 16px; font-size: 12px; color: #777; }
-    code { background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 4px; }
+    .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    .debug { font-size:12px; color:#777; margin-top:10px; }
+    button { padding:6px 10px; }
+    a { color: #0b67ff; }
   </style>
-  <!-- （オプション）地図を出す場合は Leaflet を利用 -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9B-20nQCchB9co0qIjJZRGuk2/Z9VM+kd=KY0100020001</code>（京都府国際センター）</p>
+  <!-- 地図（任意） -->
+  https://unpkg.com/leaflet@1.9.4/dist/leaflet.css
+  https://unpkg.com/leaflet@1.9.4/dist/leaflet.js
+</head>
+<body>
+  <h1>施設案内（ID指定 / BODIK API版）</h1>
+  <p class="sub">例：<code>?id=KY0100020001</code> または <code>?ID=KY0100020001</code></p>
 
-  <div id="status" role="status">読み込み中…</div>
+  <div class="toolbar">
+    <label>施設ID: <input id="idInput" placeholder="例: KY0100020001" style="width:16em"></label>
+    <button id="btnLoad">表示</button>
+    <button id="btnRetry" hidden>再試行</button>
+  </div>
+
+  <div id="status" role="status">待機中</div>
 
   <div class="card" id="card" hidden>
     <div class="grid">
-      <div class="label">施設名</div>
-      <div class="val" id="name"></div>
-
-      <div class="label">住所</div>
-      <div class="val" id="addr"></div>
-
-      <div class="label">電話番号</div>
-      <div class="val" id="tel"></div>
-
-      <div class="label">メール</div>
-      <div class="val" id="mail"></div>
-
-      <div class="label">説明</div>
-      <div class="val" id="desc"></div>
-
-      <div class="label">公式サイト</div>
-      <div class="val"><a id="site" href="#" target="_blank" rel="noopener">—</a></div>
-
-      <div class="label">ID</div>
-      <div class="val" id="id"></div>
+      <div class="label">施設名</div><div class="val" id="name"></div>
+      <div class="label">住所</div><div class="val" id="addr"></div>
+      <div class="label">電話番号</div><div class="val" id="tel"></div>
+      <div class="label">メール</div><div class="val" id="mail"></div>
+      <div class="label">説明</div><div class="val" id="desc"></div>
+      <div class="label">公式サイト</div><div class="val"><a id="site" href="#" target="_blank" rel="noopener">—</a></div>
+      <div class="label">ID</div><div class="val" id="id"></div>
     </div>
 
     <div style="margin-top:16px">
@@ -65,90 +55,182 @@
     </div>
   </div>
 
-  <div class="footer">
-    Powered by https://wapi.bodik.jp/docs.
-  </div>
+  <div class="debug" id="debug"></div>
 
 <script>
-(function(){
+(() => {
   const $ = id => document.getElementById(id);
+  const statusEl = $('status');
+  const cardEl = $('card');
+  const debugEl = $('debug');
+  const idInput = $('idInput');
+  const btnLoad = $('btnLoad');
+  const btnRetry = $('btnRetry');
+
   const qs = new URLSearchParams(location.search);
-  const id = (qs.get('id') || 'KY0100020001').trim();
+  const initialId = (qs.get('id') || qs.get('ID') || 'KY0100020001').trim();
+  idInput.value = initialId;
 
-  // BODIK API（公共施設）: CORS対応。IDで1件取得。
-  const api = new URL('https://wapi.bodik.jp/public_facility');
-  api.searchParams.set('ID', id);
-  api.searchParams.set('maxResults', '1');
+  // Fallback の ON/OFF（CKAN JSONP）
+  const ENABLE_JSONP_FALLBACK = true;
+  const CKAN_RESOURCE_ID = 'aa1b14ae-a824-4762-8f33-e45d22b61c58'; // 京都府 公共施設（DataStore）
 
-  const status = $('status');
-  const card = $('card');
-
+  function setStatus(text) {
+    if (statusEl) statusEl.textContent = text;
+  }
+  function setDebug(lines) {
+    if (debugEl) debugEl.innerHTML = Array.isArray(lines) ? lines.join('<br>') : String(lines);
+  }
   function text(v){ return (v==null || v==='') ? '—' : String(v); }
 
-  async function main(){
+  function buildWapiUrl(id) {
+    const url = new URL('https://wapi.bodik.jp/public_facility');
+    url.searchParams.set('ID', id);
+    url.searchParams.set('maxResults', '1');
+    return url;
+  }
+
+  function extractRecord(obj) {
+    // wapi: { data: [...] } / まれに配列直返しに両対応
+    return Array.isArray(obj?.data) ? obj.data[0]
+         : (Array.isArray(obj) ? obj[0] : null);
+  }
+
+  async function fetchWithTimeout(url, ms=10000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
     try {
-      const res = await fetch(api.toString(), { headers: { 'Accept': 'application/json' }});
-      if(!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-
-      // wapiの代表的な返却は { data: [...] }。環境によっては配列直返しのこともあるので両対応。
-      const record = Array.isArray(json?.data) ? json.data[0] : (Array.isArray(json) ? json[0] : null);
-      if(!record){ status.textContent = `ID=${id} の施設が見つかりません。`; return; }
-
-      // 項目名（自治体標準ODSの代表ケース＋フォールバック）
-      const name = record['名称'] || record['施設名'] || record['name'];
-      const addr = record['所在地_連結表記'] || record['住所'] || record['所在地'] || [
-        record['所在地_都道府県'], record['所在地_市区町村'], record['所在地_町字'], record['所在地_番地以下'], record['建物名等（方書）']
-      ].filter(Boolean).join('');
-      const tel  = record['電話番号'] || record['TEL'] || record['tel'];
-      const mail = record['メールアドレス'] || record['email'];
-      const desc = record['説明'] || record['description'];
-      const site = record['URL'] || record['公式サイト'] || record['website'];
-      const lat  = Number(record['緯度']);
-      const lon  = Number(record['経度']);
-
-      // 画面反映
-      $('name').textContent = text(name);
-      $('addr').textContent = text(addr);
-      $('tel').textContent  = text(tel);
-      $('mail').textContent = text(mail);
-      $('desc').textContent = text(desc);
-      $('id').textContent   = text(record['ID'] || id);
-
-      const siteEl = $('site');
-      if(site){ siteEl.href = site; siteEl.textContent = site; } else { siteEl.removeAttribute('href'); siteEl.textContent = '—'; }
-
-      // 地図（緯度経度がある場合のみ表示）
-      if(!Number.isNaN(lat) && !Number.isNaN(lon)){
-        // Leafletの読み込みが間に合っていれば地図描画
-        if(window.L){
-          const map = L.map('map').setView([lat, lon], 16);
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-            attribution: '&copy; OpenStreetMap contributors'
-          }).addTo(map);
-          L.marker([lat, lon]).addTo(map).bindPopup(text(name) || '施設').openPopup();
-          $('map-note').textContent = `緯度 ${lat}, 経度 ${lon}`;
-        } else {
-          $('map').style.display = 'none';
-          $('map-note').textContent = '地図ライブラリの読み込みに失敗しました。';
-        }
-      } else {
-        $('map').style.display = 'none';
-        $('map-note').textContent = '緯度・経度情報がありません。';
-      }
-
-      status.hidden = true;
-      card.hidden = false;
-
-    } catch(e){
-      console.error(e);
-      status.textContent = `取得に失敗しました：${e.message}`;
+      const res = await fetch(url.toString(), { headers: { 'Accept':'application/json' }, signal: ctrl.signal, cache:'no-store' });
+      return res;
+    } finally {
+      clearTimeout(t);
     }
   }
 
-  main();
+  function render(record, id) {
+    const name = record['名称'] || record['施設名'] || record['name'];
+    const addr = record['所在地_連結表記'] || record['住所'] || record['所在地'] || [
+      record['所在地_都道府県'], record['所在地_市区町村'], record['所在地_町字'], record['所在地_番地以下'], record['建物名等（方書）']
+    ].filter(Boolean).join('');
+    const tel  = record['電話番号'] || record['TEL'] || record['tel'];
+    const mail = record['メールアドレス'] || record['email'];
+    const desc = record['説明'] || record['description'];
+    const site = record['URL'] || record['公式サイト'] || record['website'];
+    const lat  = Number(record['緯度']);
+    const lon  = Number(record['経度']);
+
+    $('name').textContent = text(name);
+    $('addr').textContent = text(addr);
+    $('tel').textContent  = text(tel);
+    $('mail').textContent = text(mail);
+    $('desc').textContent = text(desc);
+    $('id').textContent   = text(record['ID'] || id);
+
+    const a = $('site');
+    if (site) { a.href = site; a.textContent = site; } else { a.removeAttribute('href'); a.textContent = '—'; }
+
+    // 地図
+    const mapDiv = $('map');
+    const note = $('map-note');
+    if (!Number.isNaN(lat) && !Number.isNaN(lon) && window.L) {
+      const map = L.map(mapDiv).setView([lat, lon], 16);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
+      L.marker([lat, lon]).addTo(map).bindPopup(text(name) || '施設').openPopup();
+      note.textContent = `緯度 ${lat}, 経度 ${lon}`;
+    } else {
+      mapDiv.style.display = 'none';
+      note.textContent = '緯度・経度情報がありません。';
+    }
+
+    if (statusEl) statusEl.hidden = true;
+    cardEl.hidden = false;
+    btnRetry.hidden = true;
+  }
+
+  function jsonpCkanById(id) {
+    return new Promise((resolve, reject) => {
+      const cb = `__ckan_cb_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      window[cb] = (resp) => {
+        try {
+          delete window[cb];
+          script.remove();
+        } catch {}
+        if (resp && resp.success && resp.result && resp.result.records && resp.result.records.length) {
+          resolve(resp.result.records[0]);
+        } else {
+          reject(new Error('CKAN JSONP: no record'));
+        }
+      };
+      const url = new URL('https://data.bodik.jp/api/3/action/datastore_search');
+      url.searchParams.set('resource_id', CKAN_RESOURCE_ID);
+      url.searchParams.set('q', `ID:${id}`);     // ← filters ではなく q を使用（409回避のため）
+      url.searchParams.set('limit', '1');
+      url.searchParams.set('callback', cb);
+
+      const script = document.createElement('script');
+      script.src = url.toString();
+      script.onerror = () => { delete window[cb]; reject(new Error('CKAN JSONP: network error')); };
+      document.head.appendChild(script);
+    });
+  }
+
+  async function load(id, isRetry=false) {
+    setStatus('読み込み中…');
+    cardEl.hidden = true;
+    btnRetry.hidden = true;
+
+    // チェック: 生成された最終URLを表示（&amp; 問題の検出にも有効）
+    const wapiUrl = buildWapiUrl(id);
+    setDebug([
+      `<b>wapi URL:</b> <a href="${wapiUrl.href}" target="_blank" rel="noopener">${wapiUrl.href}</a>`,
+      `<b>navigator.onLine:</b> ${navigator.onLine}`
+    ]);
+
+    try {
+      const res = await fetchWithTimeout(wapiUrl, 10000);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const rec = extractRecord(json);
+      if (!rec) { setStatus(`ID=${id} の施設が見つかりません。`); return; }
+      render(rec, id);
+    } catch (e) {
+      console.error(e);
+      setStatus(`wapi 取得に失敗：${e.message}`);
+      btnRetry.hidden = false;
+
+      if (ENABLE_JSONP_FALLBACK) {
+        setStatus(`wapi がタイムアウト/失敗したため CKAN(JSONP) にフォールバックします…`);
+        try {
+          const rec = await jsonpCkanById(id);
+          setStatus('CKAN(JSONP) の結果で表示しています（暫定）');
+          render(rec, id);
+          setDebug([
+            debugEl.innerHTML,
+            `<div>※ JSONP は将来互換が弱く、安定運用には https://wapi.bodik.jp/docs 利用が推奨です。</div>`
+          ]);
+        } catch (e2) {
+          console.error(e2);
+          setStatus(`CKAN(JSONP) も失敗：${e2.message}`);
+        }
+      }
+    }
+  }
+
+  btnLoad.addEventListener('click', () => {
+    const id = idInput.value.trim();
+    if (id) load(id);
+  });
+  btnRetry.addEventListener('click', () => {
+    const id = idInput.value.trim();
+    if (id) load(id, true);
+  });
+
+  // 初期ロード
+  load(initialId);
 })();
 </script>
 </body>
 </html>
+
